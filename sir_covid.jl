@@ -104,16 +104,15 @@ function model_initiation(;
     space = GraphSpace(complete_graph(C))
     model = StandardABM(PoorSoul, space; agent_step!, properties, rng)
 
-    # Add initial individuals
     for city in 1:C, n in 1:cities_population[city]
-        ind = add_agent!(city, model, 0, :S) # Susceptible
+        ind = add_agent!(city, model, 0, :S)
     end
-    # add infected individuals
+
     for city in 1:C
         inds = ids_in_position(city, model)
         for n in 1:cities_infected[city]
             agent = model[inds[n]]
-            agent.status = :I # Infected
+            agent.status = :I
             agent.days_infected = 1
         end
     end
@@ -166,7 +165,11 @@ function transmit!(agent, model)
     end
 end
 
-update!(agent, model) = agent.status == :I && (agent.days_infected += 1)
+function update!(agent, model)
+    if agent.status == :I
+        agent.days_infected += 1
+    end
+end
 
 function recover_or_die!(agent, model)
     if agent.days_infected ≥ model.infection_period
@@ -179,59 +182,99 @@ function recover_or_die!(agent, model)
     end
 end
 
-using CairoMakie
-
-@info "Starting simulation..."
-@info "Creating parameters..."
-params = create_params()
-
-@info "Initiating model..."
-model = model_initiation(; params...)
-
-@info "Creating figure..."
-infected(x) = count(i == :I for i in x)
-recovered(x) = count(i == :R for i in x)
-to_collect = [(:status, f) for f in (infected, recovered, length)]
-data, _ = run!(model, 50; adata = to_collect)
-data[1:10, :]
-
-N = sum(model.cities_population)
-fig = Figure(size = (600, 400))
-ax = fig[1, 1] = Axis(fig, xlabel = "steps", ylabel = "log10(count)")
-li = lines!(ax, data.time, log10.(data[:, dataname((:status, infected))]), color = :blue)
-lr = lines!(ax, data.time, log10.(data[:, dataname((:status, recovered))]), color = :red)
-dead = log10.(N .- data[:, dataname((:status, length))])
-ld = lines!(ax, data.time, dead, color = :green)
-Legend(fig[1, 2], [li, lr, ld], ["infected", "recovered", "dead"])
-fig
-save("epidemic_plot.png", fig)
-
-@info "Reinitiating model..."
-model = model_initiation(; params...)
-
-@info "Initiating visualization..."
-abmobs = ABMObservable(model)
-
-infected_fraction(m, x) = count(m[id].status == :I for id in x) / length(x)
-infected_fractions(m) = [infected_fraction(m, ids_in_position(p, m)) for p in positions(m)]
-fracs = lift(infected_fractions, abmobs.model)
-color = lift(fs -> [cgrad(:inferno)[f] for f in fs], fracs)
-title = lift(
-    (m) -> "step = $(abmtime(m)), infected = $(round(Int, 100*infected_fraction(m, allids(m))))%",
-    abmobs.model
-)
-
-fig = Figure(size=(600, 400))
-ax = Axis(fig[1, 1]; title, xlabel="City", ylabel="Population")
-barplot!(ax, model.cities_population; strokecolor=:black, strokewidth=1, color)
-fig
-
-@info "Starting agent steps..."
-record(fig, "covid_evolution.mp4"; framerate=5) do io
-    for j in 1:20
-        @info " -> Agent step: $(j)"
-        recordframe!(io)
-        Agents.step!(abmobs, 1)
-    end
-    recordframe!(io)
+function run_model_simulation(model, steps)
+    @info "Starting simulation for $steps steps"
+    
+    infected(x) = count(i == :I for i in x)
+    recovered(x) = count(i == :R for i in x)
+    to_collect = [(:status, f) for f in (infected, recovered, length)]
+    
+    @info "Collecting agent data..."
+    data, _ = run!(model, steps; adata=to_collect)
+    
+    @debug "Simulation completed successfully"
+    return data
 end
+
+function create_static_plots(model, data)
+    @info "Creating static epidemic curve plot..."
+    N = sum(model.cities_population)
+    
+    fig = Figure(size=(600, 400))
+    ax = Axis(fig[1, 1], xlabel="Steps", ylabel="log10(count)")
+    
+    infected(x) = count(i == :I for i in x)
+    recovered(x) = count(i == :R for i in x)
+    li = lines!(ax, data.time, log10.(data[:, dataname((:status, infected))]), color = :blue)
+    lr = lines!(ax, data.time, log10.(data[:, dataname((:status, recovered))]), color = :red)
+    dead = log10.(N .- data[:, dataname((:status, length))])
+    ld = lines!(ax, data.time, dead, color=:green)
+    
+    Legend(fig[1, 2], [li, lr, ld], ["infected", "recovered", "dead"])
+    save("epidemic_plot.png", fig)
+    @info "Saved epidemic curve plot to epidemic_plot.png"
+end
+
+function create_dynamic_visualization(params, steps)
+    @info "Preparing dynamic visualization components..."
+    model = model_initiation(; params...)
+    
+    abmobs = ABMObservable(model)
+    
+    infected_fraction(m, x) = count(m[id].status == :I for id in x) / length(x)
+    infected_fractions(m) = [infected_fraction(m, ids_in_position(p, m)) for p in positions(m)]
+    fracs = lift(infected_fractions, abmobs.model)
+    color = lift(fs -> [cgrad(:inferno)[f] for f in fs], fracs)
+    title = lift(
+        (m) -> "Step = $(abmtime(m)), Infected = $(round(Int, 100*infected_fraction(m, allids(m))))%",
+        abmobs.model
+    )
+
+    fig = Figure(size=(600, 400))
+    ax = Axis(fig[1, 1]; title, xlabel="City", ylabel="Population")
+    barplot!(ax, model.cities_population; strokecolor=:black, strokewidth=1, color)
+    
+    @info "Recording dynamic visualization ($(steps) steps)..."
+    record(fig, "covid_evolution.mp4"; framerate=2) do io
+        for j in 1:steps
+            @info "Recording frame $j/$(steps)"
+            recordframe!(io)
+            Agents.step!(abmobs, 1)
+        end
+        recordframe!(io)
+    end
+    @info "Saved dynamic visualization to covid_evolution.mp4"
+end
+
+function run_simulation()
+    @info "===== EPIDEMIC SIMULATION STARTED ====="
+    
+    # 1. Parameter Creation
+    @info "Creating simulation parameters..."
+    params = create_params()
+    # log_parameters(params)
+    
+    # 2. Model Initialization
+    @info "Initializing model..."
+    model = model_initiation(; params...)
+    # log_model_stats(model)
+    
+    # 3. Run Initial Simulation
+    steps = 10
+    @info "Running initial simulation ($(steps) steps)..."
+    data = run_model_simulation(model, steps)
+    # log_simulation_results(data)
+
+    # 4. Create Static Plots
+    @info "Generating static visualizations..."
+    create_static_plots(model, data)
+    
+    # 5. Create Dynamic Visualization
+    @info "Preparing dynamic visualization..."
+    create_dynamic_visualization(params, steps)
+    
+    @info "===== SIMULATION COMPLETE ====="
+end
+
+using CairoMakie
+run_simulation()
