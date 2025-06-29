@@ -20,7 +20,7 @@ function create_params(;
     infection_period=30,
     reinfection_probability=0.05,
     detection_time=14,
-    death_rate=0.04,
+    death_rate=0.044,
     health_quality = rand(0.5:0.1:1.0, C),
     cities_population = rand(50:5000, C),
     urban_density = rand(0.2:0.1:0.8, C),
@@ -123,6 +123,9 @@ function model_initiation(;
 end
 
 function agent_step!(agent, model)
+    if agent.status == :D
+        return
+    end
     migrate!(agent, model)
     transmit!(agent, model)
     update!(agent, model)
@@ -188,7 +191,7 @@ end
 function recover_or_die!(agent, model)
     if agent.days_infected ≥ model.infection_period
         if rand(abmrng(model)) ≤ model.cities_death_rate[agent.pos]
-            remove_agent!(agent, model)
+            agent.status = :D
         else
             agent.status = :R
             agent.days_infected = 0
@@ -201,7 +204,8 @@ function run_model_simulation(params, model, steps)
     
     infected(x) = count(i == :I for i in x)
     recovered(x) = count(i == :R for i in x)
-    to_collect = [(:status, f) for f in (infected, recovered, length)]
+    dead(x) = count(i == :D for i in x)
+    to_collect = [(:status, f) for f in (infected, recovered, dead, length)]
 
     @info "Collecting agent data..."
     data, _ = run!(model, steps; adata=to_collect)
@@ -219,14 +223,14 @@ function create_static_plots(model, data)
     
     infected(x) = count(i == :I for i in x)
     recovered(x) = count(i == :R for i in x)
+    dead(x) = count(i == :D for i in x)
     li = lines!(ax, data.time, log10.(data[:, dataname((:status, infected))]), color = :blue)
     lr = lines!(ax, data.time, log10.(data[:, dataname((:status, recovered))]), color = :red)
-    dead = log10.(N .- data[:, dataname((:status, length))])
-    ld = lines!(ax, data.time, dead, color=:green)
+    ld = lines!(ax, data.time, log10.(data[:, dataname((:status, dead))]), color=:green)
     
     Legend(fig[1, 2], [li, lr, ld], ["infected", "recovered", "dead"])
     timestamp = Dates.format(now(), "yyyy-mm-dd_HH-MM-SS")
-    filename = "static/plot/epidemic_plot_$timestamp.png"
+    filename = "static/plot/sir_covid_cities/epidemic_plot_$timestamp.png"
     save(filename, fig)
     @info "Saved epidemic curve plot to $(filename)"
 end
@@ -252,7 +256,7 @@ function create_dynamic_visualization(params, steps)
     
     @info "Recording dynamic visualization ($(steps) steps)..."
     timestamp = Dates.format(now(), "yyyy-mm-dd_HH-MM-SS")
-    filename = "static/video/covid_evolution_$timestamp.mp4"
+    filename = "static/video/sir_covid_cities/covid_evolution_$timestamp.mp4"
     record(fig, filename; framerate=2) do io
         for j in 1:steps
             @info "Recording frame $j/$(steps)"
@@ -329,8 +333,9 @@ function create_comparison_plots(models, datas, param_dicts_list, varying_params
             elseif status == "recovered"
                 recovered(x) = count(i == :R for i in x)
                 y_data = log10.(data[:, dataname((:status, recovered))])
-            else # dead
-                y_data = log10.(N .- data[:, dataname((:status, length))])
+            else 
+                dead(x) = count(i == :D for i in x)
+                y_data = log10.(data[:, dataname((:status, dead))])
             end
             
             line = lines!(ax, data.time, y_data, color=color, linewidth=2)
@@ -344,7 +349,7 @@ function create_comparison_plots(models, datas, param_dicts_list, varying_params
         Legend(fig[1, 2], legend_elements, legend_labels)
         
         timestamp = Dates.format(now(), "yyyy-mm-dd_HH-MM-SS")
-        filename = "static/plot/grid_$(status)_comparison_$timestamp.png"
+        filename = "static/plot/sir_covid_cities/grid_$(status)_comparison_$timestamp.png"
         save(filename, fig)
         @info "Saved $(status) comparison plot to $(filename)"
     end
@@ -355,22 +360,23 @@ function create_sensitivity_analysis(models, datas, param_dicts_list, varying_pa
     fig = Figure(size=(1400, 800))
     
     n_combinations = length(param_dicts_list)
-    final_infected = Float64[]
-    final_recovered = Float64[]
-    final_dead = Float64[]
+    max_infected = Float64[]
+    max_recovered = Float64[]
+    max_dead = Float64[]
     total_population = Float64[]
     labels = String[]
     
     infected(x) = count(i == :I for i in x)
     recovered(x) = count(i == :R for i in x)
+    dead(x) = count(i == :D for i in x)
     
     for (model, data, params) in zip(models, datas, param_dicts_list)
         N = sum(model.cities_population)
         
-        # Get final values
-        push!(final_infected, data[end, dataname((:status, infected))])
-        push!(final_recovered, data[end, dataname((:status, recovered))])
-        push!(final_dead, N - data[end, dataname((:status, length))])
+        # Get maximum values across all time steps
+        push!(max_infected, maximum(data[:, dataname((:status, infected))]))
+        push!(max_recovered, maximum(data[:, dataname((:status, recovered))]))
+        push!(max_dead, maximum(data[:, dataname((:status, dead))]))
         push!(total_population, N)
         push!(labels, create_param_label(params, varying_params))
     end
@@ -378,8 +384,8 @@ function create_sensitivity_analysis(models, datas, param_dicts_list, varying_pa
     # Plot 1: Absolute counts with log scale
     ax1 = Axis(fig[1, 1], 
                xlabel="Parameter Combinations", 
-               ylabel="Final Count (log scale)",
-               title="Final Epidemic Outcomes - Absolute Counts",
+               ylabel="Count (log scale)",
+               title="Epidemic Outcomes - Absolute Counts",
                xticks=(1:n_combinations, labels),
                xticklabelrotation=π/4,
                yscale=log10)
@@ -388,9 +394,9 @@ function create_sensitivity_analysis(models, datas, param_dicts_list, varying_pa
     width = 0.25
     
     # Add small offset to avoid log(0)
-    safe_infected = max.(final_infected, 1)
-    safe_recovered = max.(final_recovered, 1)
-    safe_dead = max.(final_dead, 1)
+    safe_infected = max.(max_infected, 1)
+    safe_recovered = max.(max_recovered, 1)
+    safe_dead = max.(max_dead, 1)
     
     barplot!(ax1, x_pos .- width, safe_infected, width=width, color=:blue, label="Infected")
     barplot!(ax1, x_pos, safe_recovered, width=width, color=:red, label="Recovered") 
@@ -402,13 +408,13 @@ function create_sensitivity_analysis(models, datas, param_dicts_list, varying_pa
     ax2 = Axis(fig[2, 1], 
                xlabel="Parameter Combinations", 
                ylabel="Percentage (%)",
-               title="Final Epidemic Outcomes - Percentages",
+               title="Epidemic Outcomes - Percentages",
                xticks=(1:n_combinations, labels),
                xticklabelrotation=π/4)
     
-    pct_infected = (final_infected ./ total_population) .* 100
-    pct_recovered = (final_recovered ./ total_population) .* 100
-    pct_dead = (final_dead ./ total_population) .* 100
+    pct_infected = (max_infected ./ total_population) .* 100
+    pct_recovered = (max_recovered ./ total_population) .* 100
+    pct_dead = (max_dead ./ total_population) .* 100
     
     barplot!(ax2, x_pos .- width, pct_infected, width=width, color=:blue, label="Infected %")
     barplot!(ax2, x_pos, pct_recovered, width=width, color=:red, label="Recovered %") 
@@ -421,18 +427,18 @@ function create_sensitivity_analysis(models, datas, param_dicts_list, varying_pa
         ax3 = Axis(fig[1:2, 3], 
                    xlabel="Parameter Combinations", 
                    ylabel="Relative Change from Baseline (%)",
-                   title="Relative Changes from First Combination",
+                   title="Relative Changes from First Combination (Peak Values)",
                    xticks=(2:n_combinations, labels[2:end]),
                    xticklabelrotation=π/4)
         
         # Calculate relative changes (excluding first combination as baseline)
-        baseline_infected = final_infected[1]
-        baseline_recovered = final_recovered[1]
-        baseline_dead = final_dead[1]
+        baseline_infected = max_infected[1]
+        baseline_recovered = max_recovered[1]
+        baseline_dead = max_dead[1]
         
-        rel_infected = ((final_infected[2:end] .- baseline_infected) ./ baseline_infected) .* 100
-        rel_recovered = ((final_recovered[2:end] .- baseline_recovered) ./ baseline_recovered) .* 100
-        rel_dead = ((final_dead[2:end] .- baseline_dead) ./ baseline_dead) .* 100
+        rel_infected = ((max_infected[2:end] .- baseline_infected) ./ baseline_infected) .* 100
+        rel_recovered = ((max_recovered[2:end] .- baseline_recovered) ./ baseline_recovered) .* 100
+        rel_dead = ((max_dead[2:end] .- baseline_dead) ./ baseline_dead) .* 100
         
         x_pos_rel = 2:n_combinations
         
@@ -447,37 +453,37 @@ function create_sensitivity_analysis(models, datas, param_dicts_list, varying_pa
     end
     
     timestamp = Dates.format(now(), "yyyy-mm-dd_HH-MM-SS")
-    filename = "static/plot/grid_sensitivity_analysis_$timestamp.png"
+    filename = "static/plot/sir_covid_cities/grid_sensitivity_analysis_$timestamp.png"
     save(filename, fig)
     @info "Saved sensitivity analysis plot to $(filename)"
     
-    # Also create a summary table
-    create_sensitivity_summary_table(labels, final_infected, final_recovered, final_dead, total_population)
+    # Also create a summary table with peak values
+    create_sensitivity_summary_table(labels, max_infected, max_recovered, max_dead, total_population)
 end
 
-function create_sensitivity_summary_table(labels, final_infected, final_recovered, final_dead, total_population)
+function create_sensitivity_summary_table(labels, infected_values, recovered_values, dead_values, total_population)
     @info "=== SENSITIVITY ANALYSIS SUMMARY ==="
     println("Parameter Combination | Infected | Recovered | Dead | Total Pop | Infected% | Recovered% | Dead%")
     println("-" ^ 90)
     
     for i in 1:length(labels)
-        pct_infected = round((final_infected[i] / total_population[i]) * 100, digits=2)
-        pct_recovered = round((final_recovered[i] / total_population[i]) * 100, digits=2)
-        pct_dead = round((final_dead[i] / total_population[i]) * 100, digits=2)
+        pct_infected = round((infected_values[i] / total_population[i]) * 100, digits=2)
+        pct_recovered = round((recovered_values[i] / total_population[i]) * 100, digits=2)
+        pct_dead = round((dead_values[i] / total_population[i]) * 100, digits=2)
         
-        println("$(rpad(labels[i], 20)) | $(rpad(Int(final_infected[i]), 8)) | $(rpad(Int(final_recovered[i]), 9)) | $(rpad(Int(final_dead[i]), 4)) | $(rpad(Int(total_population[i]), 9)) | $(rpad(pct_infected, 9))% | $(rpad(pct_recovered, 10))% | $(rpad(pct_dead, 4))%")
+        println("$(rpad(labels[i], 20)) | $(rpad(Int(infected_values[i]), 8)) | $(rpad(Int(recovered_values[i]), 9)) | $(rpad(Int(dead_values[i]), 4)) | $(rpad(Int(total_population[i]), 9)) | $(rpad(pct_infected, 9))% | $(rpad(pct_recovered, 10))% | $(rpad(pct_dead, 4))%")
     end
     
     if length(labels) > 1
         println("\n=== RELATIVE CHANGES FROM BASELINE ($(labels[1])) ===")
-        baseline_infected = final_infected[1]
-        baseline_recovered = final_recovered[1]
-        baseline_dead = final_dead[1]
+        baseline_infected = infected_values[1]
+        baseline_recovered = recovered_values[1]
+        baseline_dead = dead_values[1]
         
         for i in 2:length(labels)
-            rel_infected = round(((final_infected[i] - baseline_infected) / baseline_infected) * 100, digits=2)
-            rel_recovered = round(((final_recovered[i] - baseline_recovered) / baseline_recovered) * 100, digits=2)
-            rel_dead = round(((final_dead[i] - baseline_dead) / baseline_dead) * 100, digits=2)
+            rel_infected = round(((infected_values[i] - baseline_infected) / baseline_infected) * 100, digits=2)
+            rel_recovered = round(((recovered_values[i] - baseline_recovered) / baseline_recovered) * 100, digits=2)
+            rel_dead = round(((dead_values[i] - baseline_dead) / baseline_dead) * 100, digits=2)
             
             println("$(rpad(labels[i], 20)) | Infected: $(rel_infected)% | Recovered: $(rel_recovered)% | Dead: $(rel_dead)%")
         end
@@ -516,7 +522,7 @@ function run_simulation(grid=false, steps=10, num_cities=4)
             :infection_period => [14],
             :reinfection_probability => [0.1],
             :detection_time => [7],
-            :death_rate => [0.05],
+            :death_rate => [0.044],
             :health_quality => [rand(0.8:0.1:1.0, num_cities)],
             :cities_population => [rand(50:5000, num_cities)],
             :urban_density => [rand(0.2:0.1:0.8, num_cities)],
@@ -597,4 +603,4 @@ function run_simulation(grid=false, steps=10, num_cities=4)
 end
 
 using CairoMakie
-run_simulation(true, 40, 3)
+run_simulation(true, 80, 3)
