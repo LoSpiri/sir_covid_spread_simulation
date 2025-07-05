@@ -602,5 +602,189 @@ function run_simulation(grid=false, steps=10, num_cities=4)
     @info "===== SIMULATION COMPLETE ====="
 end
 
+# using CairoMakie
+# run_simulation(true, 80, 3)
+
+function run_simulation(grid=false, steps=10, num_cities=4)
+    @info "===== EPIDEMIC SIMULATION STARTED ====="
+    
+    if (grid)
+        grid_parameters = Dict(
+            :C => [num_cities],
+            :max_travel_rate => [0.01],
+            :lockdown_threshold => [0.05, 0.2],
+            :travel_reduction => [0.75, 0.9, 0.99],
+            :infection_period => [14],
+            :reinfection_probability => [0.1],
+            :detection_time => [7],
+            :death_rate => [0.044],
+            :health_quality => [rand(0.8:0.1:1.0, num_cities)],
+            :cities_population => [rand(50:5000, num_cities)],
+            :urban_density => [rand(0.2:0.1:0.8, num_cities)],
+            :cities_infected => [[zeros(Int, num_cities - 1)..., 1]],
+            :seed => [19]
+        )
+        
+        # Extract parameter names and values in consistent order
+        param_names = collect(keys(grid_parameters))
+        param_values = [grid_parameters[name] for name in param_names]
+        
+        # Generate all combinations using Iterators.product
+        all_combinations = collect(Iterators.product(param_values...))
+        
+        # Create list of parameter dictionaries
+        param_dicts_list = []
+        @info "Will run $(length(all_combinations)) simulations..."
+        
+        for combination in all_combinations
+            # Create keyword arguments dict for this combination
+            kwargs = Dict()
+            for (i, param_name) in enumerate(param_names)
+                kwargs[param_name] = combination[i]
+            end
+            
+            # Call create_params with the current combination of parameters
+            param_dict = create_params(; kwargs...)
+            
+            # Add to our list
+            push!(param_dicts_list, param_dict)
+        end
+        
+        datas_list = []
+        models_list = []
+        for params in param_dicts_list
+            # 2. Model Initialization
+            @info "Initializing model..."
+            model = model_initiation(; params...)
+            # log_model_stats(model)
+            
+            # 3. Run Initial Simulation
+            @info "Running initial simulation ($(steps) steps)..."
+            data = run_model_simulation(params, model, steps)
+            # log_simulation_results(data)
+            push!(datas_list, data)
+            push!(models_list, model)
+        end
+        
+        # 4. Create Static Plots
+        @info "Generating static visualizations..."
+        create_grid_static_plots(models_list, datas_list, param_dicts_list)
+    else
+        # 1. Parameter Creation
+        @info "Creating simulation parameters..."
+        params = create_params()
+        # log_parameters(params)
+        
+        # 2. Model Initialization
+        @info "Initializing model..."
+        model = model_initiation(; params...)
+        # log_model_stats(model)
+        
+        # 3. Run Initial Simulation
+        @info "Running initial simulation ($(steps) steps)..."
+        data = run_model_simulation(params, model, steps)
+        # log_simulation_results(data)
+        
+        # 4. Create Static Plots
+        @info "Generating static visualizations..."
+        create_static_plots(model, data)
+        
+        # 5. Create Dynamic Visualization
+        @info "Preparing dynamic visualization..."
+        create_dynamic_visualization(params, steps)
+    end
+    
+    @info "===== SIMULATION COMPLETE ====="
+end
+
+# Parse command line arguments
+function parse_args()
+    args = ARGS
+    
+    # Default values
+    grid = false
+    steps = 10
+    num_cities = 4
+    
+    # Parse arguments
+    if length(args) >= 1
+        grid = parse(Bool, args[1])
+    end
+    if length(args) >= 2
+        steps = parse(Int, args[2])
+    end
+    if length(args) >= 3
+        num_cities = parse(Int, args[3])
+    end
+    
+    return grid, steps, num_cities
+end
+
+# Alternative version with more robust argument parsing
+function parse_args()
+    args = ARGS
+    
+    # Default values
+    grid = false
+    steps = 10
+    num_cities = 4
+    
+    if length(args) == 0
+        println("Usage: julia script.jl <grid> <steps> <num_cities>")
+        println("  grid: true/false (default: false)")
+        println("  steps: integer (default: 10)")
+        println("  num_cities: integer (default: 4)")
+        println("Using default values...")
+        return grid, steps, num_cities
+    end
+    
+    # Parse arguments with error handling
+    try
+        if length(args) >= 1
+            grid_str = lowercase(args[1])
+            if grid_str in ["true", "1", "yes", "on"]
+                grid = true
+            elseif grid_str in ["false", "0", "no", "off"]
+                grid = false
+            else
+                error("Invalid grid value: $(args[1]). Use true/false")
+            end
+        end
+        
+        if length(args) >= 2
+            steps = parse(Int, args[2])
+            if steps <= 0
+                error("Steps must be positive")
+            end
+        end
+        
+        if length(args) >= 3
+            num_cities = parse(Int, args[3])
+            if num_cities <= 0
+                error("Number of cities must be positive")
+            end
+        end
+        
+    catch e
+        println("Error parsing arguments: $e")
+        println("Usage: julia script.jl <grid> <steps> <num_cities>")
+        exit(1)
+    end
+    
+    return grid, steps, num_cities
+end
+
+# Main execution
 using CairoMakie
-run_simulation(true, 80, 3)
+
+# Parse command line arguments
+grid, steps, num_cities = parse_args()
+
+# Display parsed arguments
+println("Running simulations with:")
+println("  Grid mode: $grid")
+println("  Steps: $steps")
+println("  Number of cities: $num_cities")
+
+# Run the simulation
+run_simulation(grid, steps, num_cities)

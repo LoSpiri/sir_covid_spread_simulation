@@ -8,8 +8,8 @@ using DrWatson: @dict
 # =============================================================================
 
 const STEPS_PER_DAY = 24
-const DEFAULT_SIMULATION_STEPS = 2000
-const DEFAULT_VIDEO_FRAMES = 200
+const DEFAULT_SIMULATION_STEPS = 3000
+const DEFAULT_VIDEO_FRAMES = 300
 
 # =============================================================================
 # AGENT DEFINITION
@@ -226,14 +226,21 @@ function create_comparison_plots()
     l3 = lines!(ax, data3[:, dataname((:status, infected))], color = :green)
     
     figure[1, 2][1,1] = Legend(figure, [l1, l2, l3], 
-                               ["r=$r1, beta=$β1", "r=$r2, beta=$β1", "r=$r1, beta=$β2"])
-    
+    [
+    "reinfect rate=$r1,\ntransmit prob=$β1",
+    "reinfect rate=$r2,\ntransmit prob=$β1",
+    "reinfect rate=$r1,\ntransmit prob=$β2"
+    ])    
     # Add social distancing scenario
     r4 = 0.04
     data4 = run_simulation_scenario("Social distancing"; reinfection_probability = r4, βmin = β1, isolated = 0.8)
     
     l4 = lines!(ax, data4[:, dataname((:status, infected))], color = :red)
-    figure[1, 2][2,1] = Legend(figure, [l4], ["r=$r4, social distancing"])
+    figure[1, 2][2,1] = Legend(
+        figure,
+        [l4],
+        ["reinfect rate=$r4,\ntransmit prob=$β1,\nisolated = 0.8"]
+    )
     
     timestamp = Dates.format(now(), "yyyy-mm-dd_HH-MM-SS")
     filename = "static/plot/sir_covid_people/epidemic_plot_$timestamp.png"
