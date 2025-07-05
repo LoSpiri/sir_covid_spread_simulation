@@ -235,7 +235,7 @@ function create_static_plots(model, data)
     @info "Saved epidemic curve plot to $(filename)"
 end
 
-function create_dynamic_visualization(params, steps)
+function create_dynamic_visualization(params, steps; suffix="")
     @info "Preparing dynamic visualization components..."
     model = model_initiation(; params...)
     
@@ -256,7 +256,7 @@ function create_dynamic_visualization(params, steps)
     
     @info "Recording dynamic visualization ($(steps) steps)..."
     timestamp = Dates.format(now(), "yyyy-mm-dd_HH-MM-SS")
-    filename = "static/video/sir_covid_cities/covid_evolution_$timestamp.mp4"
+    filename = "static/video/sir_covid_cities/covid_evolution_$(suffix)_$timestamp.mp4"
     record(fig, filename; framerate=2) do io
         for j in 1:steps
             @info "Recording frame $j/$(steps)"
@@ -510,101 +510,38 @@ function create_param_label(params, varying_params)
     return join(label_parts, ", ")
 end
 
-function run_simulation(grid=false, steps=10, num_cities=4)
-    @info "===== EPIDEMIC SIMULATION STARTED ====="
+function find_best_parameters(models, datas, param_dicts_list)
+    """
+    Find the parameter combination that produced the least deaths
+    Returns: (best_params, best_model_index, min_deaths)
+    """
+    dead(x) = count(i == :D for i in x)
     
-    if (grid)
-        grid_parameters = Dict(
-            :C => [num_cities],
-            :max_travel_rate => [0.01],
-            :lockdown_threshold => [0.05, 0.2],
-            :travel_reduction => [0.75, 0.9, 0.99],
-            :infection_period => [14],
-            :reinfection_probability => [0.1],
-            :detection_time => [7],
-            :death_rate => [0.044],
-            :health_quality => [rand(0.8:0.1:1.0, num_cities)],
-            :cities_population => [rand(50:5000, num_cities)],
-            :urban_density => [rand(0.2:0.1:0.8, num_cities)],
-            :cities_infected => [[zeros(Int, num_cities - 1)..., 1]],
-            :seed => [19]
-        )
-
-        # Extract parameter names and values in consistent order
-        param_names = collect(keys(grid_parameters))
-        param_values = [grid_parameters[name] for name in param_names]
-
-        # Generate all combinations using Iterators.product
-        all_combinations = collect(Iterators.product(param_values...))
-
-        # Create list of parameter dictionaries
-        param_dicts_list = []
-
-        for combination in all_combinations
-            # Create keyword arguments dict for this combination
-            kwargs = Dict()
-            for (i, param_name) in enumerate(param_names)
-                kwargs[param_name] = combination[i]
-            end
-            
-            # Call create_params with the current combination of parameters
-            param_dict = create_params(; kwargs...)
-            
-            # Add to our list
-            push!(param_dicts_list, param_dict)
-        end
-
-        datas_list = []
-        models_list = []
-        for params in param_dicts_list
-            # 2. Model Initialization
-            @info "Initializing model..."
-            model = model_initiation(; params...)
-            # log_model_stats(model)
-            
-            # 3. Run Initial Simulation
-            @info "Running initial simulation ($(steps) steps)..."
-            data = run_model_simulation(params, model, steps)
-            # log_simulation_results(data)
-            push!(datas_list, data)
-            push!(models_list, model)
-        end
-
-        # 4. Create Static Plots
-        @info "Generating static visualizations..."
-        create_grid_static_plots(models_list, datas_list, param_dicts_list)
-    else
-        # 1. Parameter Creation
-        @info "Creating simulation parameters..."
-        params = create_params()
-        # log_parameters(params)
-        
-        # 2. Model Initialization
-        @info "Initializing model..."
-        model = model_initiation(; params...)
-        # log_model_stats(model)
-        
-        # 3. Run Initial Simulation
-        @info "Running initial simulation ($(steps) steps)..."
-        data = run_model_simulation(params, model, steps)
-        # log_simulation_results(data)
+    min_deaths = Inf
+    best_index = 1
+    death_counts = Float64[]
     
-        # 4. Create Static Plots
-        @info "Generating static visualizations..."
-        create_static_plots(model, data)
+    for (i, (model, data, params)) in enumerate(zip(models, datas, param_dicts_list))
+        max_deaths = maximum(data[:, dataname((:status, dead))])
+        push!(death_counts, max_deaths)
         
-        # 5. Create Dynamic Visualization
-        @info "Preparing dynamic visualization..."
-        create_dynamic_visualization(params, steps)
+        if max_deaths < min_deaths
+            min_deaths = max_deaths
+            best_index = i
+        end
     end
-
     
-    @info "===== SIMULATION COMPLETE ====="
+    @info "=== BEST PARAMETER COMBINATION (Least Deaths) ==="
+    @info "Index: $best_index"
+    @info "Deaths: $(Int(min_deaths))"
+    
+    varying_params = find_varying_parameters(param_dicts_list)
+    best_label = create_param_label(param_dicts_list[best_index], varying_params)
+    @info "Parameters: $best_label"
+    
+    return param_dicts_list[best_index], best_index, min_deaths
 end
 
-# using CairoMakie
-# run_simulation(true, 80, 3)
-
 function run_simulation(grid=false, steps=10, num_cities=4)
     @info "===== EPIDEMIC SIMULATION STARTED ====="
     
@@ -612,8 +549,8 @@ function run_simulation(grid=false, steps=10, num_cities=4)
         grid_parameters = Dict(
             :C => [num_cities],
             :max_travel_rate => [0.01],
-            :lockdown_threshold => [0.05, 0.2],
-            :travel_reduction => [0.75, 0.9, 0.99],
+            :lockdown_threshold => [0.05],
+            :travel_reduction => [0.75, 0.9],
             :infection_period => [14],
             :reinfection_probability => [0.1],
             :detection_time => [7],
@@ -652,16 +589,13 @@ function run_simulation(grid=false, steps=10, num_cities=4)
         
         datas_list = []
         models_list = []
-        for params in param_dicts_list
+        for (i, params) in enumerate(param_dicts_list)
+            @info "Running simulation $i/$(length(param_dicts_list))..."
             # 2. Model Initialization
-            @info "Initializing model..."
             model = model_initiation(; params...)
-            # log_model_stats(model)
             
             # 3. Run Initial Simulation
-            @info "Running initial simulation ($(steps) steps)..."
             data = run_model_simulation(params, model, steps)
-            # log_simulation_results(data)
             push!(datas_list, data)
             push!(models_list, model)
         end
@@ -669,21 +603,31 @@ function run_simulation(grid=false, steps=10, num_cities=4)
         # 4. Create Static Plots
         @info "Generating static visualizations..."
         create_grid_static_plots(models_list, datas_list, param_dicts_list)
+        
+        # 5. Find best parameters and create video
+        @info "Finding best parameters and creating video..."
+        best_params, best_index, min_deaths = find_best_parameters(models_list, datas_list, param_dicts_list)
+        
+        # Create video for the best parameter combination
+        varying_params = find_varying_parameters(param_dicts_list)
+        best_label = create_param_label(best_params, varying_params)
+        video_suffix = "best_params_$(replace(best_label, " " => "_", "," => "_"))"
+        
+        @info "Creating dynamic visualization for best parameters..."
+        create_dynamic_visualization(best_params, steps; suffix=video_suffix)
+        
     else
         # 1. Parameter Creation
         @info "Creating simulation parameters..."
         params = create_params()
-        # log_parameters(params)
         
         # 2. Model Initialization
         @info "Initializing model..."
         model = model_initiation(; params...)
-        # log_model_stats(model)
         
         # 3. Run Initial Simulation
         @info "Running initial simulation ($(steps) steps)..."
         data = run_model_simulation(params, model, steps)
-        # log_simulation_results(data)
         
         # 4. Create Static Plots
         @info "Generating static visualizations..."
@@ -698,29 +642,6 @@ function run_simulation(grid=false, steps=10, num_cities=4)
 end
 
 # Parse command line arguments
-function parse_args()
-    args = ARGS
-    
-    # Default values
-    grid = false
-    steps = 10
-    num_cities = 4
-    
-    # Parse arguments
-    if length(args) >= 1
-        grid = parse(Bool, args[1])
-    end
-    if length(args) >= 2
-        steps = parse(Int, args[2])
-    end
-    if length(args) >= 3
-        num_cities = parse(Int, args[3])
-    end
-    
-    return grid, steps, num_cities
-end
-
-# Alternative version with more robust argument parsing
 function parse_args()
     args = ARGS
     
