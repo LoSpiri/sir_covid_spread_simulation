@@ -9,7 +9,7 @@ using Distributions
 
 @agent struct PoorSoul(GraphAgent)
     days_infected::Int  # number of days since is infected
-    status::Symbol  # 1: S, 2: I, 3:R
+    status::Symbol  # 1: S, 2: I, 3: R, 4: D
 end
 
 function create_params(;
